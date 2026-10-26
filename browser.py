@@ -10,19 +10,25 @@ from pathlib import Path
 if hasattr(os, "geteuid") and os.geteuid() == 0:
     os.environ.setdefault("QTWEBENGINE_DISABLE_SANDBOX", "1")
 
-from PyQt6.QtCore import QByteArray, QSize, Qt, QUrl
+from PyQt6.QtCore import QByteArray, QSize, Qt, QUrl, pyqtSignal
 from PyQt6.QtGui import QAction, QIcon, QKeySequence, QPixmap
 from PyQt6.QtWidgets import (
     QApplication,
+    QHBoxLayout,
+    QLabel,
     QLineEdit,
     QMainWindow,
     QProgressBar,
+    QStackedWidget,
+    QTabBar,
     QToolBar,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
 try:
+    from PyQt6.QtWebEngineCore import QWebEnginePage
     from PyQt6.QtWebEngineWidgets import QWebEngineView
 except ImportError as exc:  # pragma: no cover - depends on the system
     sys.exit(
@@ -49,10 +55,32 @@ ICONS = {
     "stop": '<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>',
     "home": '<path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>'
     '<polyline points="9 22 9 12 15 12 15 22"/>',
+    "plus": '<line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>',
+    "globe": '<circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/>'
+    '<path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 '
+    '15.3 15.3 0 0 1 4-10z"/>',
+    "loading": '<circle cx="12" cy="12" r="9" stroke-opacity="0.25"/><path d="M21 12a9 9 0 0 0-9-9"/>',
 }
 
 STYLESHEET = """
-QMainWindow { background: #0f1117; }
+QMainWindow, #tabStrip { background: #0f1117; }
+QTabBar { background: transparent; }
+QTabBar::tab {
+    background: transparent;
+    color: #8a93a8;
+    border: none;
+    border-top-left-radius: 10px;
+    border-top-right-radius: 10px;
+    margin-top: 6px;
+    margin-right: 2px;
+    padding: 7px 4px 7px 10px;
+}
+QTabBar::tab:selected { background: #161a23; }
+QTabBar::tab:hover:!selected { background: #171b25; }
+QTabBar::scroller { width: 48px; }
+QTabBar QToolButton { background: #0f1117; border-radius: 0; }
+QLabel#tabTitle { color: #8a93a8; font-size: 13px; }
+QLabel#tabTitle[current="true"] { color: #e6e9ef; }
 QToolBar {
     background: #161a23;
     border: none;
@@ -69,6 +97,9 @@ QToolButton {
 QToolButton:hover { background: #232a3a; }
 QToolButton:pressed { background: #2c3448; }
 QToolButton:disabled { background: transparent; }
+QTabBar QToolButton#tabClose { background: transparent; padding: 2px; border-radius: 5px; }
+QTabBar QToolButton#tabClose:hover { background: #2c3448; }
+QToolButton#newTab { margin: 6px 0 0 4px; }
 QLineEdit {
     background: #0f1117;
     color: #e6e9ef;
@@ -119,17 +150,110 @@ def url_from_input(text: str) -> QUrl:
     return QUrl(SEARCH_URL.format(QUrl.toPercentEncoding(text).data().decode()))
 
 
+class TabBar(QTabBar):
+    """Tab bar with browser conventions: middle-click closes, double-click empty space opens."""
+
+    newTabRequested = pyqtSignal()
+
+    def mouseReleaseEvent(self, event) -> None:
+        index = self.tabAt(event.position().toPoint())
+        if event.button() == Qt.MouseButton.MiddleButton and index >= 0:
+            self.tabCloseRequested.emit(index)
+        else:
+            super().mouseReleaseEvent(event)
+
+    def mouseDoubleClickEvent(self, event) -> None:
+        if self.tabAt(event.position().toPoint()) < 0:
+            self.newTabRequested.emit()
+        else:
+            super().mouseDoubleClickEvent(event)
+
+
+class TabLabel(QWidget):
+    """Favicon + left-aligned, elided title. Replaces QTabBar's centred text."""
+
+    TITLE_WIDTH = 150
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.title = ""
+        self.icon_label = QLabel()
+        self.icon_label.setFixedSize(16, 16)
+        self.title_label = QLabel()
+        self.title_label.setObjectName("tabTitle")
+        self.title_label.setFixedWidth(self.TITLE_WIDTH)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(4, 0, 0, 0)
+        layout.setSpacing(8)
+        layout.addWidget(self.icon_label)
+        layout.addWidget(self.title_label)
+
+    def set_icon(self, icon: QIcon) -> None:
+        self.icon_label.setPixmap(icon.pixmap(16, 16))
+
+    def set_title(self, title: str) -> None:
+        self.title = title
+        metrics = self.title_label.fontMetrics()
+        self.title_label.setText(metrics.elidedText(title, Qt.TextElideMode.ElideRight, self.TITLE_WIDTH))
+
+    def set_current(self, current: bool) -> None:
+        self.title_label.setProperty("current", current)
+        self.title_label.style().unpolish(self.title_label)
+        self.title_label.style().polish(self.title_label)
+
+
+class BrowserTab(QWebEngineView):
+    """One page. Tracks its own load state so the shared toolbar can show it on tab switch."""
+
+    def __init__(self, browser: "BrowserWindow") -> None:
+        super().__init__()
+        self.browser = browser
+        self.loading = False
+        self.load_progress = 0
+
+    def createWindow(self, window_type):
+        # target=_blank links, window.open(), Ctrl+click and middle-click all land here.
+        background = window_type == QWebEnginePage.WebWindowType.WebBrowserBackgroundTab
+        return self.browser.new_tab(background=background, opener=self)
+
+
 class BrowserWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle(APP_NAME)
         self.resize(1280, 820)
 
-        self.view = QWebEngineView()
+        # Tab strip on top, Chrome-style: tabs followed by a "+" button.
+        self.tab_bar = TabBar()
+        self.tab_bar.setMovable(True)
+        self.tab_bar.setExpanding(False)
+        self.tab_bar.setDrawBase(False)
+        self.tab_bar.setUsesScrollButtons(True)
+        self.tab_bar.currentChanged.connect(self._on_tab_changed)
+        self.tab_bar.tabCloseRequested.connect(self.close_tab)
+        self.tab_bar.newTabRequested.connect(self.open_new_tab)
 
-        self.back_action = self._add_action("back", "Back (Alt+Left)", self.view.back,
+        new_tab_button = QToolButton()
+        new_tab_button.setObjectName("newTab")
+        new_tab_button.setIcon(make_icon("plus"))
+        new_tab_button.setIconSize(QSize(16, 16))
+        new_tab_button.setToolTip("New tab (Ctrl+T)")
+        new_tab_button.clicked.connect(self.open_new_tab)
+
+        tab_strip = QWidget()
+        tab_strip.setObjectName("tabStrip")
+        tab_strip.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        strip_layout = QHBoxLayout(tab_strip)
+        strip_layout.setContentsMargins(8, 0, 8, 0)
+        strip_layout.setSpacing(0)
+        strip_layout.addWidget(self.tab_bar)
+        strip_layout.addWidget(new_tab_button)
+        strip_layout.addStretch(1)
+
+        self.back_action = self._add_action("back", "Back (Alt+Left)", lambda: self.current_view().back(),
                                             QKeySequence.StandardKey.Back)
-        self.forward_action = self._add_action("forward", "Forward (Alt+Right)", self.view.forward,
+        self.forward_action = self._add_action("forward", "Forward (Alt+Right)",
+                                               lambda: self.current_view().forward(),
                                                QKeySequence.StandardKey.Forward)
         self.reload_action = self._add_action("reload", "Reload (F5)", self._reload_or_stop,
                                               QKeySequence.StandardKey.Refresh)
@@ -141,11 +265,6 @@ class BrowserWindow(QMainWindow):
         self.address_bar.setClearButtonEnabled(True)
         self.address_bar.returnPressed.connect(self.navigate_to_input)
 
-        focus_bar = QAction(self)
-        focus_bar.setShortcuts([QKeySequence("Ctrl+L"), QKeySequence("F6")])
-        focus_bar.triggered.connect(self._focus_address_bar)
-        self.addAction(focus_bar)
-
         toolbar = QToolBar("Navigation")
         toolbar.setMovable(False)
         toolbar.setIconSize(QSize(18, 18))
@@ -153,7 +272,6 @@ class BrowserWindow(QMainWindow):
         for action in (self.back_action, self.forward_action, self.reload_action, self.home_action):
             toolbar.addAction(action)
         toolbar.addWidget(self.address_bar)
-        self.addToolBar(toolbar)
 
         # Thin loading bar sitting between the toolbar and the page.
         self.progress = QProgressBar()
@@ -162,23 +280,29 @@ class BrowserWindow(QMainWindow):
         self.progress.setRange(0, 100)
         self.progress.hide()
 
+        self.stack = QStackedWidget()
+
         central = QWidget()
         layout = QVBoxLayout(central)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
+        layout.addWidget(tab_strip)
+        layout.addWidget(toolbar)
         layout.addWidget(self.progress)
-        layout.addWidget(self.view)
+        layout.addWidget(self.stack)
         self.setCentralWidget(central)
 
-        self.view.urlChanged.connect(self._on_url_changed)
-        self.view.titleChanged.connect(self._on_title_changed)
-        self.view.loadStarted.connect(self._on_load_started)
-        self.view.loadProgress.connect(self._on_load_progress)
-        self.view.loadFinished.connect(self._on_load_finished)
+        self._add_shortcut(["Ctrl+L", "F6"], self._focus_address_bar)
+        self._add_shortcut(["Ctrl+T"], self.open_new_tab)
+        self._add_shortcut(["Ctrl+W", "Ctrl+F4"], lambda: self.close_tab(self.tab_bar.currentIndex()))
+        self._add_shortcut(["Ctrl+Tab", "Ctrl+PgDown"], lambda: self._cycle_tab(1))
+        self._add_shortcut(["Ctrl+Shift+Tab", "Ctrl+PgUp"], lambda: self._cycle_tab(-1))
+        for n in range(1, 9):
+            # triggered() passes `checked` first, so it must not land in `n`.
+            self._add_shortcut([f"Ctrl+{n}"], lambda _checked=False, n=n: self._select_tab(n - 1))
+        self._add_shortcut(["Ctrl+9"], lambda: self._select_tab(self.tab_bar.count() - 1))
 
-        self._loading = False
-        self._update_nav_buttons()
-        self.go_home()
+        self.new_tab(HOME_URL)
 
     def _add_action(self, icon: str, tip: str, slot, shortcut) -> QAction:
         action = QAction(make_icon(icon), tip.split(" (")[0], self)
@@ -187,62 +311,200 @@ class BrowserWindow(QMainWindow):
         action.triggered.connect(slot)
         return action
 
-    # Navigation
+    def _add_shortcut(self, keys: list, slot) -> None:
+        action = QAction(self)
+        action.setShortcuts([QKeySequence(k) for k in keys])
+        action.triggered.connect(slot)
+        self.addAction(action)
+
+    # Tabs
+
+    def current_view(self) -> BrowserTab:
+        return self.stack.currentWidget()
+
+    def _view_at(self, index: int):
+        return self.tab_bar.tabData(index)
+
+    def tab_label(self, index: int) -> TabLabel:
+        return self.tab_bar.tabButton(index, QTabBar.ButtonPosition.LeftSide)
+
+    def _index_of(self, view: BrowserTab) -> int:
+        for i in range(self.tab_bar.count()):
+            if self._view_at(i) is view:
+                return i
+        return -1
+
+    def new_tab(self, url: QUrl = None, background: bool = False, opener: BrowserTab = None) -> BrowserTab:
+        view = BrowserTab(self)
+        view.urlChanged.connect(lambda u, v=view: self._on_url_changed(v, u))
+        view.titleChanged.connect(lambda t, v=view: self._on_title_changed(v, t))
+        view.iconChanged.connect(lambda _, v=view: self._refresh_tab_icon(v))
+        view.loadStarted.connect(lambda v=view: self._on_load_started(v))
+        view.loadProgress.connect(lambda p, v=view: self._on_load_progress(v, p))
+        view.loadFinished.connect(lambda ok, v=view: self._on_load_finished(v))
+        self.stack.addWidget(view)
+
+        # Tabs opened from a page go right after it, like Chrome; others go at the end.
+        if opener is not None:
+            index = self.tab_bar.insertTab(self._index_of(opener) + 1, "")
+        else:
+            index = self.tab_bar.addTab("")
+        self.tab_bar.setTabData(index, view)
+        label = TabLabel()
+        label.set_icon(make_icon("globe"))
+        label.set_title("New Tab")
+        self.tab_bar.setTabButton(index, QTabBar.ButtonPosition.LeftSide, label)
+
+        close_button = QToolButton()
+        close_button.setObjectName("tabClose")
+        close_button.setIcon(make_icon("stop"))
+        close_button.setIconSize(QSize(12, 12))
+        close_button.setToolTip("Close tab (Ctrl+W)")
+        close_button.clicked.connect(lambda _, v=view: self.close_tab(self._index_of(v)))
+        self.tab_bar.setTabButton(index, QTabBar.ButtonPosition.RightSide, close_button)
+
+        if not background:
+            self.tab_bar.setCurrentIndex(index)
+            # The very first tab became current before its data was set; sync it now.
+            self._on_tab_changed(index)
+        if url is not None:
+            view.setUrl(url)
+        return view
+
+    def open_new_tab(self) -> None:
+        self.new_tab(HOME_URL)
+        self._focus_address_bar()
+
+    def close_tab(self, index: int) -> None:
+        if index < 0:
+            return
+        if self.tab_bar.count() == 1:
+            self.close()  # Closing the last tab closes the window, like Chrome.
+            return
+        view = self._view_at(index)
+        self.tab_bar.removeTab(index)
+        self.stack.removeWidget(view)
+        view.deleteLater()
+
+    def _cycle_tab(self, step: int) -> None:
+        count = self.tab_bar.count()
+        self.tab_bar.setCurrentIndex((self.tab_bar.currentIndex() + step) % count)
+
+    def _select_tab(self, index: int) -> None:
+        if 0 <= index < self.tab_bar.count():
+            self.tab_bar.setCurrentIndex(index)
+
+    def _on_tab_changed(self, index: int) -> None:
+        view = self._view_at(index) if index >= 0 else None
+        if view is None:
+            return
+        self.stack.setCurrentWidget(view)
+        for i in range(self.tab_bar.count()):
+            if self.tab_label(i):
+                self.tab_label(i).set_current(i == index)
+        self._show_url(view.url())
+        self._update_window_title(view.title())
+        self._update_nav_buttons()
+        self._update_load_state()
+        if not self.address_bar.hasFocus():
+            view.setFocus()
+
+    # Navigation (always acts on the current tab)
 
     def navigate_to_input(self) -> None:
-        self.view.setUrl(url_from_input(self.address_bar.text()))
-        self.view.setFocus()
+        view = self.current_view()
+        view.setUrl(url_from_input(self.address_bar.text()))
+        view.setFocus()
 
     def go_home(self) -> None:
-        self.view.setUrl(HOME_URL)
+        self.current_view().setUrl(HOME_URL)
 
     def _reload_or_stop(self) -> None:
-        if self._loading:
-            self.view.stop()
+        view = self.current_view()
+        if view.loading:
+            view.stop()
         else:
-            self.view.reload()
+            view.reload()
 
     def _focus_address_bar(self) -> None:
         self.address_bar.setFocus()
         self.address_bar.selectAll()
 
-    # Web view signals
+    # Web view signals. Every tab reports in; the toolbar only follows the current one.
 
-    def _on_url_changed(self, url: QUrl) -> None:
+    def _on_url_changed(self, view: BrowserTab, url: QUrl) -> None:
         # Fires for typed URLs, clicked links, redirects and back/forward alike.
+        if view is self.current_view():
+            self._show_url(url)
+            self._update_nav_buttons()
+
+    def _on_title_changed(self, view: BrowserTab, title: str) -> None:
+        index = self._index_of(view)
+        if index < 0:
+            return
+        text = title or view.url().toString() or "New Tab"
+        self.tab_label(index).set_title(text)
+        self.tab_bar.setTabToolTip(index, text)
+        if view is self.current_view():
+            self._update_window_title(title)
+
+    def _on_load_started(self, view: BrowserTab) -> None:
+        view.loading = True
+        view.load_progress = 0
+        self._refresh_tab_icon(view)
+        if view is self.current_view():
+            self._update_load_state()
+
+    def _on_load_progress(self, view: BrowserTab, value: int) -> None:
+        view.load_progress = value
+        if view is self.current_view():
+            self.progress.setValue(value)
+
+    def _on_load_finished(self, view: BrowserTab) -> None:
+        view.loading = False
+        self._refresh_tab_icon(view)
+        if view is self.current_view():
+            self._update_load_state()
+            self._update_nav_buttons()
+
+    # Toolbar / tab presentation
+
+    def _show_url(self, url: QUrl) -> None:
         # The homepage shows an empty bar (with placeholder) like a new-tab page.
         self.address_bar.setText("" if url == HOME_URL else url.toString())
         self.address_bar.setCursorPosition(0)
-        self._update_nav_buttons()
 
-    def _on_title_changed(self, title: str) -> None:
+    def _update_window_title(self, title: str) -> None:
         self.setWindowTitle(f"{title} - {APP_NAME}" if title and title != APP_NAME else APP_NAME)
 
-    def _on_load_started(self) -> None:
-        self._loading = True
-        self.progress.setValue(0)
-        self.progress.show()
-        self.reload_action.setIcon(make_icon("stop"))
-        self.reload_action.setToolTip("Stop (Esc)")
+    def _refresh_tab_icon(self, view: BrowserTab) -> None:
+        index = self._index_of(view)
+        if index < 0:
+            return
+        if view.loading:
+            icon = make_icon("loading")
+        elif not view.icon().isNull():
+            icon = view.icon()
+        else:
+            icon = make_icon("globe")
+        self.tab_label(index).set_icon(icon)
 
-    def _on_load_progress(self, value: int) -> None:
-        self.progress.setValue(value)
-
-    def _on_load_finished(self, ok: bool) -> None:
-        self._loading = False
-        self.progress.hide()
-        self.reload_action.setIcon(make_icon("reload"))
-        self.reload_action.setToolTip("Reload (F5)")
-        self._update_nav_buttons()
+    def _update_load_state(self) -> None:
+        view = self.current_view()
+        self.progress.setVisible(view.loading)
+        self.progress.setValue(view.load_progress)
+        self.reload_action.setIcon(make_icon("stop" if view.loading else "reload"))
+        self.reload_action.setToolTip("Stop (Esc)" if view.loading else "Reload (F5)")
 
     def _update_nav_buttons(self) -> None:
-        history = self.view.history()
+        history = self.current_view().history()
         self.back_action.setEnabled(history.canGoBack())
         self.forward_action.setEnabled(history.canGoForward())
 
     def keyPressEvent(self, event) -> None:
-        if event.key() == Qt.Key.Key_Escape and self._loading:
-            self.view.stop()
+        view = self.current_view()
+        if event.key() == Qt.Key.Key_Escape and view.loading:
+            view.stop()
         else:
             super().keyPressEvent(event)
 

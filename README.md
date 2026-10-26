@@ -13,8 +13,24 @@ Chromium-based QtWebEngine.
 - Back / Forward / Reload / Home buttons, which grey out when unavailable.
 - Homepage showing "Tesseract" in Black Ops One. The font is bundled in
   `assets/fonts`, so it works offline.
-- Keyboard shortcuts: `Ctrl+L`/`F6` focus the address bar, `Alt+Left`/`Alt+Right`
-  go back/forward, `F5` reloads, `Esc` stops, `Alt+Home` goes home.
+- Tabs: each tab is its own Chromium page with a favicon (a spinner while loading).
+  Tabs can be dragged to reorder.
+  - New tab: the `+` button, `Ctrl+T`, or double-click empty tab-bar space.
+  - Close: the `×` button, middle-click, or `Ctrl+W`. Closing the last tab closes the window.
+  - Links with `target=_blank` open in a new tab next to the page that opened them.
+    Middle-click or `Ctrl+click` opens one in the background.
+  - The toolbar, address bar and loading bar always follow the selected tab.
+- Keyboard shortcuts:
+
+  | Keys | Action |
+  | --- | --- |
+  | `Ctrl+L` / `F6` | Focus the address bar |
+  | `Ctrl+T` / `Ctrl+W` | New tab / close tab |
+  | `Ctrl+Tab` / `Ctrl+Shift+Tab` (or `Ctrl+PgDown` / `Ctrl+PgUp`) | Next / previous tab |
+  | `Ctrl+1` … `Ctrl+8`, `Ctrl+9` | Jump to tab N, or to the last tab |
+  | `Alt+Left` / `Alt+Right` | Back / forward |
+  | `F5` / `Esc` | Reload / stop |
+  | `Alt+Home` | Home |
 
 ## Setup
 
