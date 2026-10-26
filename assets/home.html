@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Tesseract</title>
+<style>
+  /* Bundled with the app so the homepage renders offline. */
+  @font-face {
+    font-family: "Black Ops One";
+    src: url("fonts/BlackOpsOne-Regular.ttf") format("truetype");
+    font-display: block;
+  }
+  html, body {
+    margin: 0;
+    height: 100%;
+  }
+  body {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 28px;
+    background: radial-gradient(ellipse at top, #1e2433 0%, #0f1117 70%);
+    color: #e6e9ef;
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  h1 {
+    margin: 0;
+    font-family: "Black Ops One", system-ui, sans-serif;
+    font-weight: 400;
+    font-size: clamp(56px, 12vw, 140px);
+    letter-spacing: 0.04em;
+    background: linear-gradient(135deg, #7aa2f7 0%, #bb9af7 55%, #f7768e 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    text-shadow: 0 0 40px rgba(122, 162, 247, 0.15);
+  }
+  form {
+    width: min(560px, 86vw);
+  }
+  input {
+    box-sizing: border-box;
+    width: 100%;
+    padding: 14px 22px;
+    border: 1px solid #2a3142;
+    border-radius: 999px;
+    background: #171b26;
+    color: #e6e9ef;
+    font-size: 16px;
+    outline: none;
+  }
+  input:focus {
+    border-color: #7aa2f7;
+    box-shadow: 0 0 0 3px rgba(122, 162, 247, 0.25);
+  }
+  p {
+    margin: 0;
+    color: #6b7489;
+    font-size: 13px;
+  }
+</style>
+</head>
+<body>
+  <h1>Tesseract</h1>
+  <form action="https://duckduckgo.com/" method="get">
+    <input name="q" placeholder="Search the web" autofocus autocomplete="off">
+  </form>
+  <p>A browser built to run fast on anything.</p>
+</body>
+</html>

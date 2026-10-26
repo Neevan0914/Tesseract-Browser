@@ -1,0 +1,10 @@
+[project]
+name = "tesseract-browser"
+version = "0.1.0"
+description = "A browser built to run fast on anything."
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "PyQt6>=6.5",
+    "PyQt6-WebEngine>=6.5",
+]
