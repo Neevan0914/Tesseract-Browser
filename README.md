@@ -31,6 +31,27 @@ Chromium-based QtWebEngine.
   | `Alt+Left` / `Alt+Right` | Back / forward |
   | `F5` / `Esc` | Reload / stop |
   | `Alt+Home` | Home |
+  | `Ctrl+J` | Open or close Quadro |
+
+## Quadro, the AI search assistant
+
+Quadro answers questions by searching the web with Claude (Claude Opus 5.5 with web
+search) and lists the pages it used as sources. Click a source to open it in a new tab.
+Ask follow-up questions in the same chat, or click **New chat** to start over.
+
+- **Open it:** type a question in the homepage search bar and click **AI search**, or type
+  in the address bar and click the sparkle icon at its right, or press `Ctrl+J`.
+- **API key:** Quadro needs an Anthropic API key, which you can create at
+  [console.anthropic.com](https://console.anthropic.com/settings/keys). Paste it when
+  Quadro asks. It's saved for your user account (on Windows, in the registry under
+  `HKEY_CURRENT_USER\Software\Tesseract`). Remove it any time with **API key**, then
+  **Remove saved key**. If the `ANTHROPIC_API_KEY` environment variable is set, Quadro
+  uses that instead.
+- **Cost and privacy:** each question is sent to Anthropic and billed to the key's account
+  (tokens plus web searches). Quadro only sends what you type into it, never your
+  browsing history or the pages you have open.
+- **Safety:** only Tesseract's own homepage can open Quadro. Websites can't use it or
+  spend your API credits.
 
 ## Setup
 

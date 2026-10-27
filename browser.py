@@ -10,7 +10,7 @@ from pathlib import Path
 if hasattr(os, "geteuid") and os.geteuid() == 0:
     os.environ.setdefault("QTWEBENGINE_DISABLE_SANDBOX", "1")
 
-from PyQt6.QtCore import QByteArray, QSize, Qt, QTimer, QUrl, pyqtSignal
+from PyQt6.QtCore import QByteArray, QSize, Qt, QTimer, QUrl, QUrlQuery, pyqtSignal
 from PyQt6.QtGui import QAction, QIcon, QKeySequence, QPixmap
 from PyQt6.QtWidgets import (
     QApplication,
@@ -28,7 +28,13 @@ from PyQt6.QtWidgets import (
 )
 
 try:
-    from PyQt6.QtWebEngineCore import QWebEnginePage
+    from PyQt6.QtWebEngineCore import (
+        QWebEnginePage,
+        QWebEngineProfile,
+        QWebEngineUrlRequestJob,
+        QWebEngineUrlScheme,
+        QWebEngineUrlSchemeHandler,
+    )
     from PyQt6.QtWebEngineWidgets import QWebEngineView
 except ImportError as exc:  # pragma: no cover - depends on the system
     sys.exit(
@@ -41,6 +47,17 @@ APP_NAME = "Tesseract"
 ASSETS_DIR = Path(__file__).resolve().parent / "assets"
 HOME_URL = QUrl.fromLocalFile(str(ASSETS_DIR / "home.html"))
 SEARCH_URL = "https://duckduckgo.com/?q={}"
+
+# The homepage's "AI search" button navigates to quadro:search?q=... . The scheme
+# must be registered before QApplication exists. As a local scheme, web pages
+# can't navigate to it, so only local pages (the homepage) can open Quadro.
+QUADRO_SCHEME = b"quadro"
+_quadro_scheme = QWebEngineUrlScheme(QUADRO_SCHEME)
+_quadro_scheme.setSyntax(QWebEngineUrlScheme.Syntax.Path)
+_quadro_scheme.setFlags(QWebEngineUrlScheme.Flag.LocalScheme | QWebEngineUrlScheme.Flag.LocalAccessAllowed)
+QWebEngineUrlScheme.registerScheme(_quadro_scheme)
+
+from quadro import QuadroPanel  # noqa: E402  (after the scheme registration above)
 
 # Feather-style stroke icons, rendered from inline SVG so no icon files are needed.
 _SVG = (
@@ -60,10 +77,13 @@ ICONS = {
     '<path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 '
     '15.3 15.3 0 0 1 4-10z"/>',
     "loading": '<circle cx="12" cy="12" r="9" stroke-opacity="0.25"/><path d="M21 12a9 9 0 0 0-9-9"/>',
+    "sparkle": '<path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/>'
+    '<path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z"/>',
 }
 
 STYLESHEET = """
 QMainWindow, #tabStrip { background: #0f1117; }
+QMainWindow::separator { background: #232838; width: 1px; }
 QTabBar { background: transparent; }
 QTabBar::tab {
     background: transparent;
@@ -238,6 +258,21 @@ class BrowserTab(QWebEngineView):
         return self.browser.new_tab(background=background, opener=self)
 
 
+class QuadroLinkHandler(QWebEngineUrlSchemeHandler):
+    """Turns quadro:search?q=... navigations from local pages into Quadro questions."""
+
+    requested = pyqtSignal(str)
+
+    def requestStarted(self, job: QWebEngineUrlRequestJob) -> None:
+        # "file://" is the homepage; "" means typed into the address bar.
+        if job.initiator().toString() not in ("file://", ""):
+            job.fail(QWebEngineUrlRequestJob.Error.RequestDenied)
+            return
+        query = QUrlQuery(job.requestUrl()).queryItemValue("q", QUrl.ComponentFormattingOption.FullyDecoded)
+        self.requested.emit(query)
+        job.fail(QWebEngineUrlRequestJob.Error.RequestAborted)  # stay on the current page
+
+
 class BrowserWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
@@ -285,6 +320,9 @@ class BrowserWindow(QMainWindow):
         self.address_bar.setPlaceholderText("Search or enter address")
         self.address_bar.setClearButtonEnabled(True)
         self.address_bar.returnPressed.connect(self.navigate_to_input)
+        self.quadro_action = self.address_bar.addAction(make_icon("sparkle"), QLineEdit.ActionPosition.TrailingPosition)
+        self.quadro_action.setToolTip("Ask Quadro, the AI search assistant (Ctrl+J)")
+        self.quadro_action.triggered.connect(self.ask_quadro_from_bar)
 
         toolbar = QToolBar("Navigation")
         toolbar.setMovable(False)
@@ -322,6 +360,17 @@ class BrowserWindow(QMainWindow):
             # triggered() passes `checked` first, so it must not land in `n`.
             self._add_shortcut([f"Ctrl+{n}"], lambda _checked=False, n=n: self._select_tab(n - 1))
         self._add_shortcut(["Ctrl+9"], lambda: self._select_tab(self.tab_bar.count() - 1))
+        self._add_shortcut(["Ctrl+J"], self.toggle_quadro)
+
+        # Quadro, the AI search assistant, docks on the right.
+        self.quadro = QuadroPanel(self)
+        self.quadro.open_url.connect(lambda url: self.new_tab(url))
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.quadro)
+        self.quadro.hide()
+        self.resizeDocks([self.quadro], [400], Qt.Orientation.Horizontal)
+        self.quadro_links = QuadroLinkHandler(self)
+        self.quadro_links.requested.connect(self.quadro.ask)
+        QWebEngineProfile.defaultProfile().installUrlSchemeHandler(QUADRO_SCHEME, self.quadro_links)
 
         self.new_tab(HOME_URL)
 
@@ -446,6 +495,21 @@ class BrowserWindow(QMainWindow):
             view.stop()
         else:
             view.reload()
+
+    def ask_quadro_from_bar(self) -> None:
+        # Ask about what's typed in the bar; if it just shows the page address, open the panel.
+        text = self.address_bar.text().strip()
+        url = self.current_view().url()
+        if text and text != ("" if url == HOME_URL else url.toString()):
+            self.quadro.ask(text)
+        else:
+            self.quadro.open_panel()
+
+    def toggle_quadro(self) -> None:
+        if self.quadro.isVisible():
+            self.quadro.hide()
+        else:
+            self.quadro.open_panel()
 
     def _focus_address_bar(self) -> None:
         self.address_bar.setFocus()

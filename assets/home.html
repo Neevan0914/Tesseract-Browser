@@ -38,12 +38,13 @@
     text-shadow: 0 0 40px rgba(122, 162, 247, 0.15);
   }
   form {
+    position: relative;
     width: min(560px, 86vw);
   }
   input {
     box-sizing: border-box;
     width: 100%;
-    padding: 14px 22px;
+    padding: 14px 140px 14px 22px;
     border: 1px solid #2a3142;
     border-radius: 999px;
     background: #171b26;
@@ -55,6 +56,27 @@
     border-color: #7aa2f7;
     box-shadow: 0 0 0 3px rgba(122, 162, 247, 0.25);
   }
+  .ai {
+    position: absolute;
+    top: 50%;
+    right: 7px;
+    transform: translateY(-50%);
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 8px 14px 8px 11px;
+    border: 1px solid transparent;
+    border-radius: 999px;
+    background:
+      linear-gradient(#1d2231, #1d2231) padding-box,
+      linear-gradient(135deg, #7aa2f7, #bb9af7 55%, #f7768e) border-box;
+    color: #e6e9ef;
+    font: 500 14px system-ui, -apple-system, "Segoe UI", sans-serif;
+    cursor: pointer;
+  }
+  .ai:hover { background: linear-gradient(#262c3f, #262c3f) padding-box, linear-gradient(135deg, #7aa2f7, #bb9af7 55%, #f7768e) border-box; }
+  .ai:focus-visible { outline: 2px solid #bb9af7; outline-offset: 2px; }
+  .ai svg { width: 16px; height: 16px; fill: none; stroke: #bb9af7; stroke-width: 2; stroke-linejoin: round; }
   p {
     margin: 0;
     color: #6b7489;
@@ -65,8 +87,19 @@
 <body>
   <h1>Tesseract</h1>
   <form action="https://duckduckgo.com/" method="get">
-    <input name="q" placeholder="Search the web" autofocus autocomplete="off">
+    <input name="q" placeholder="Search the web" autofocus autocomplete="off" aria-label="Search the web">
+    <button class="ai" type="button" id="ai-search" title="Ask Quadro, the AI search assistant">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z"/></svg>
+      AI search
+    </button>
   </form>
   <p>A browser built to run fast on anything.</p>
+  <script>
+    // Tesseract picks up quadro: links and opens the Quadro panel with the question.
+    document.getElementById("ai-search").addEventListener("click", () => {
+      const q = document.querySelector("input[name=q]").value.trim();
+      location.href = "quadro:search?q=" + encodeURIComponent(q);
+    });
+  </script>
 </body>
 </html>

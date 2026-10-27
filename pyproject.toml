@@ -7,4 +7,5 @@ requires-python = ">=3.9"
 dependencies = [
     "PyQt6>=6.5",
     "PyQt6-WebEngine>=6.5",
+    "anthropic>=2.3,<3",
 ]
