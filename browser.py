@@ -10,7 +10,7 @@ from pathlib import Path
 if hasattr(os, "geteuid") and os.geteuid() == 0:
     os.environ.setdefault("QTWEBENGINE_DISABLE_SANDBOX", "1")
 
-from PyQt6.QtCore import QByteArray, QSize, Qt, QUrl, pyqtSignal
+from PyQt6.QtCore import QByteArray, QSize, Qt, QTimer, QUrl, pyqtSignal
 from PyQt6.QtGui import QAction, QIcon, QKeySequence, QPixmap
 from PyQt6.QtWidgets import (
     QApplication,
@@ -202,11 +202,32 @@ class TabLabel(QWidget):
         self.title_label.style().polish(self.title_label)
 
 
+class BrowserPage(QWebEnginePage):
+    # Navigations the browser starts itself; Chromium allows these from any page.
+    _BROWSER_INITIATED = (
+        QWebEnginePage.NavigationType.NavigationTypeTyped,
+        QWebEnginePage.NavigationType.NavigationTypeBackForward,
+        QWebEnginePage.NavigationType.NavigationTypeReload,
+    )
+
+    def acceptNavigationRequest(self, url: QUrl, nav_type, is_main_frame: bool) -> bool:
+        # The homepage is a file:// page, and Chromium refuses to let local pages
+        # navigate to the web (ERR_NETWORK_ACCESS_DENIED, "Your Internet access is
+        # blocked"). So when its search box or a link heads online, cancel that and
+        # load the URL ourselves, exactly as if it had been typed in the address bar.
+        if (is_main_frame and self.url() == HOME_URL and url.scheme() in ("http", "https")
+                and nav_type not in self._BROWSER_INITIATED):
+            QTimer.singleShot(0, lambda: self.setUrl(url))
+            return False
+        return super().acceptNavigationRequest(url, nav_type, is_main_frame)
+
+
 class BrowserTab(QWebEngineView):
     """One page. Tracks its own load state so the shared toolbar can show it on tab switch."""
 
     def __init__(self, browser: "BrowserWindow") -> None:
         super().__init__()
+        self.setPage(BrowserPage(self))
         self.browser = browser
         self.loading = False
         self.load_progress = 0
